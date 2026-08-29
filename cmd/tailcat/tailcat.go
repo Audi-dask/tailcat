@@ -119,11 +119,12 @@ as 'all_proxy' environment variable to a child process. Destination
 hostnames that are themselves address blobs are dialed as tailcat
 servers, so the <addrblob> argument is optional:
 
-	tailcat socks [-listen <addr:port>] [<addrblob>] [<cmd> [args...]]
+	tailcat socks [--listen=<addr:port>] [<addrblob>] [<cmd> [args...]]
 	tailcat socks <addrblob> curl http://server.tailcat:8081/
 	tailcat socks curl http://<addrblob>:8081/
 
-If you don't specify the cmd, just the proxy server will start.
+With no <cmd>, the SOCKS5 proxy server runs by itself and prints
+its address.
 
 Parse an address blob and print its encoded fields as JSON:
 
@@ -461,14 +462,13 @@ func clientMode(logf logger.Logf, connStr, optDest string) {
 	}
 }
 
-// This function will only fill in the missing part.
-// 0.0.0.0 and 0 will be used for the address and port respectively.
-// It won't validate the input, we delegate this to the following socket creation
+// normalizeListenAddrPort fills in the missing parts of the --listen
+// flag value s so it's a valid net.Listen address. A bare port means
+// localhost on that port; a bare host means an OS-assigned port; an
+// empty host (as in ":1234") is left alone, meaning all interfaces.
+// It doesn't validate the result, leaving that to net.Listen.
 func normalizeListenAddrPort(s string) string {
 	if host, port, err := net.SplitHostPort(s); err == nil {
-		if host == "" {
-			host = "0.0.0.0"
-		}
 		if port == "" {
 			port = "0"
 		}
@@ -476,17 +476,17 @@ func normalizeListenAddrPort(s string) string {
 	} else if port, err := strconv.ParseUint(s, 10, 16); err == nil {
 		return net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port)))
 	}
-	// Assume it's hostname
+	// Assume it's a hostname or IP without a port.
 	return s + ":0"
 }
 
 func clientSOCKSMode(logf logger.Logf) {
 	fs := flag.NewFlagSet("socks", flag.ExitOnError)
-	listen := fs.String("listen", "127.0.0.1:0", "Proxy server's listen address")
+	listen := fs.String("listen", "127.0.0.1:0", "SOCKS5 proxy listen [address]:port; a bare port means localhost, a bare address means an OS-assigned port")
 	fs.Parse(flag.Args()[1:]) // stripping off "socks"
 	args := fs.Args()
 
-	lisenAddrPort := normalizeListenAddrPort(*listen)
+	listenAddrPort := normalizeListenAddrPort(*listen)
 
 	// The address blob argument is optional: destination hostnames that
 	// are themselves address blobs are dialed directly (see
@@ -534,7 +534,7 @@ func clientSOCKSMode(logf logger.Logf) {
 		return c
 	}
 
-	socksLn, err := net.Listen("tcp", lisenAddrPort)
+	socksLn, err := net.Listen("tcp", listenAddrPort)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -574,7 +574,7 @@ func clientSOCKSMode(logf logger.Logf) {
 			log.Fatal(err)
 		}
 	} else {
-		fmt.Printf("SOCKS running at %v\n", socksAddr)
+		log.Printf("SOCKS running at %v", socksAddr)
 		log.Fatalf("SOCKS5 server exited: %v", ss.Serve(socksLn))
 	}
 }

@@ -148,9 +148,9 @@ func TestNormalizeListenAddrPort(t *testing.T) {
 			want:  "127.0.0.1:1234",
 		},
 		{
-			name:  "omit address",
+			name:  "omit address means all interfaces",
 			input: ":1234",
-			want:  "0.0.0.0:1234",
+			want:  ":1234",
 		},
 		{
 			name:  "omit port with IPv4 address",
@@ -172,7 +172,7 @@ func TestNormalizeListenAddrPort(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := normalizeListenAddrPort(tt.input)
 			if got != tt.want {
-				t.Fatalf("classifyListenAddrPort(%q) = %q; want %q", tt.input, got, tt.want)
+				t.Fatalf("normalizeListenAddrPort(%q) = %q; want %q", tt.input, got, tt.want)
 			}
 		})
 	}
