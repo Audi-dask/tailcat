@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -50,6 +51,7 @@ var (
 	flagAllow       = flag.String("allow", "", "comma-separated list of public keys to allow access to the server, or 'none' to allow no clients. If empty, all clients are allowed.")
 	flagVerbose     = flag.Bool("verbose", false, "be verbose")
 	flagReadme      = flag.Bool("readme", false, "print the tailcat README (documentation with usage examples) and exit")
+	flagVersion     = flag.Bool("version", false, "print the tailcat version and exit")
 	flagFullAddress = flag.Bool("full-address", false, "in server mode, print a longer connection address token with embedded DERP server info instead of a reference to a DERP map region ID. This lets clients connect more quickly, without a DERP map fetch.")
 	flagJSON        = flag.Bool("json", false, "in server mode, write {\"listenAddr\": ...} JSON to stdout")
 
@@ -172,11 +174,31 @@ Flags:
 	os.Exit(1)
 }
 
+// version is set via -ldflags by GoReleaser at release time.
+// It is empty for go-install and plain go-build builds.
+var version string
+
+// versionString returns the version set at release build time,
+// falling back to the module version from the Go build info.
+func versionString() string {
+	if version != "" {
+		return version
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" {
+		return bi.Main.Version
+	}
+	return "unknown"
+}
+
 func main() {
 	flag.Usage = func() { usage("") }
 	flag.Parse()
 	if *flagReadme {
 		os.Stdout.WriteString(tailcat.README)
+		return
+	}
+	if *flagVersion {
+		fmt.Println(versionString())
 		return
 	}
 	if *flagVerbose {

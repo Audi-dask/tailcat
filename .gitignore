@@ -2,6 +2,9 @@
 /tailcat
 /cmd/tailcat/tailcat
 
+# GoReleaser output.
+/dist
+
 # Go test artifacts.
 *.test
 *.out
