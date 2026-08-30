@@ -48,6 +48,15 @@ func WasmExecJS() (string, error) {
 // the rest shrinks the wasm binary by about 6 MB (18%).
 var keep = []featuretags.FeatureTag{
 	"netstack",
+
+	// TODO(bradfitz): remove peerapiclient once
+	// https://github.com/tailscale/tailscale/pull/21037 (making
+	// tsdial.Dialer.Close not panic when the feature is omitted)
+	// is merged and tailcat's go.mod picks it up. Keeping it only
+	// works around that shutdown panic; tailcat doesn't use the
+	// peerapi client. See
+	// https://github.com/tailscale/tailcat/issues/29.
+	"peerapiclient",
 }
 
 // Tags returns the comma-joined -tags value for the wasm build,
