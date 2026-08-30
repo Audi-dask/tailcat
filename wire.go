@@ -27,12 +27,12 @@ type wireConnInfo struct {
 	ServerPublic      NodePublic    `cbor:"p" json:"ServerPublic"`
 	ServerDiscoPublic *DiscoPublic  `cbor:"k,omitempty" json:"ServerDiscoPublic,omitempty"`
 	Region            []*wireRegion `cbor:"r,omitempty" json:"Region,omitempty"`
-	RegionID          int           `cbor:"i,omitempty" json:"RegionID,omitempty"`
+	RegionID          int64         `cbor:"i,omitempty" json:"RegionID,omitempty"`
 }
 
 // wireRegion is the wire form of [tailcfg.DERPRegion].
 type wireRegion struct {
-	RegionID   int         `cbor:"i,omitempty" json:"RegionID,omitempty"`
+	RegionID   int64       `cbor:"i,omitempty" json:"RegionID,omitempty"`
 	RegionCode string      `cbor:"c,omitempty" json:"RegionCode,omitempty"`
 	RegionName string      `cbor:"m,omitempty" json:"RegionName,omitempty"`
 	Nodes      []*wireNode `cbor:"N,omitempty" json:"Nodes,omitempty"`
@@ -41,7 +41,7 @@ type wireRegion struct {
 // wireNode is the wire form of [tailcfg.DERPNode].
 type wireNode struct {
 	Name     string `cbor:"n,omitempty" json:"Name,omitempty"`
-	RegionID int    `cbor:"i,omitempty" json:"RegionID,omitempty"`
+	RegionID int64  `cbor:"i,omitempty" json:"RegionID,omitempty"`
 	HostName string `cbor:"h,omitempty" json:"HostName,omitempty"`
 
 	// CertName is the expected TLS cert name when it differs from
@@ -65,7 +65,7 @@ type wireNode struct {
 // embedded region is for.
 func wireRegionOf(r *tailcfg.DERPRegion) *wireRegion {
 	w := &wireRegion{
-		RegionID:   r.RegionID,
+		RegionID:   r.RegionID.Int64(),
 		RegionCode: r.RegionCode,
 		RegionName: r.RegionName,
 	}
@@ -75,7 +75,7 @@ func wireRegionOf(r *tailcfg.DERPRegion) *wireRegion {
 		}
 		w.Nodes = append(w.Nodes, &wireNode{
 			Name:             n.Name,
-			RegionID:         n.RegionID,
+			RegionID:         n.RegionID.Int64(),
 			HostName:         n.HostName,
 			CertName:         n.CertName,
 			IPv4:             n.IPv4,
@@ -91,14 +91,14 @@ func wireRegionOf(r *tailcfg.DERPRegion) *wireRegion {
 // derpRegion converts w back to a [tailcfg.DERPRegion].
 func (w *wireRegion) derpRegion() *tailcfg.DERPRegion {
 	r := &tailcfg.DERPRegion{
-		RegionID:   w.RegionID,
+		RegionID:   tailcfg.DERPRegionID(w.RegionID),
 		RegionCode: w.RegionCode,
 		RegionName: w.RegionName,
 	}
 	for _, n := range w.Nodes {
 		r.Nodes = append(r.Nodes, &tailcfg.DERPNode{
 			Name:             n.Name,
-			RegionID:         n.RegionID,
+			RegionID:         tailcfg.DERPRegionID(n.RegionID),
 			HostName:         n.HostName,
 			CertName:         n.CertName,
 			IPv4:             n.IPv4,

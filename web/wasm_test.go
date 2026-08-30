@@ -117,7 +117,7 @@ var buildDist = sync.OnceValues(func() (string, error) {
 // renumbered to newID. Tests pass an arbitrary ID (at most the DERP
 // maximum of 999) so that the browser's region auto-selection can't
 // get away with assuming small region IDs exist, as it once did.
-func renumberRegion(t *testing.T, dm *tailcfg.DERPMap, newID int) *tailcfg.DERPMap {
+func renumberRegion(t *testing.T, dm *tailcfg.DERPMap, newID tailcfg.DERPRegionID) *tailcfg.DERPMap {
 	t.Helper()
 	j, err := json.Marshal(dm)
 	if err != nil {

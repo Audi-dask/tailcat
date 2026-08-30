@@ -392,7 +392,7 @@ func clientPingMode(logf logger.Logf) {
 		direct := res.Endpoint != ""
 		via := res.Endpoint
 		if !direct {
-			via = fmt.Sprintf("DERP(%v)", cmp.Or(res.DERPRegionCode, strconv.Itoa(res.DERPRegionID)))
+			via = fmt.Sprintf("DERP(%v)", cmp.Or(res.DERPRegionCode, res.DERPRegionID.String()))
 		}
 		fmt.Printf("pong in %v via %v\n", latency, via)
 		if direct || !*untilDirect {
@@ -1145,7 +1145,7 @@ func genKey() {
 	if *region == "auto" {
 		priv.Public.RegionID = -1
 	} else if n, err := strconv.Atoi(*region); err == nil {
-		priv.Public.RegionID = n
+		priv.Public.RegionID = tailcfg.DERPRegionID(n)
 	} else if strings.Contains(*region, ".") {
 		hosts := strings.Split(*region, ",")
 		reg := &tailcfg.DERPRegion{}
@@ -1221,7 +1221,7 @@ func genKey() {
 }
 
 // or returns 0 on no match
-func findRegionIDFromSubstring(dm *tailcfg.DERPMap, s string) (regionID int) {
+func findRegionIDFromSubstring(dm *tailcfg.DERPMap, s string) (regionID tailcfg.DERPRegionID) {
 	if s == "list" {
 		return 0
 	}

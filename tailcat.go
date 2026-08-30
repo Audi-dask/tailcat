@@ -165,7 +165,7 @@ type ConnInfo struct {
 	// the derpmap from tailscale.com once at startup.
 	// If -1 (for use when saving a keypair to disk for reuse later), a region
 	// is selected automatically at startup based on latency.
-	RegionID int `json:",omitempty"`
+	RegionID tailcfg.DERPRegionID `json:",omitempty"`
 }
 
 // NodePublic is a wrapper around key.NodePublic just so we can have a slightly
@@ -263,7 +263,7 @@ type locoBackend struct {
 
 	// onDERPRecv is called for non-disco DERP packets before the
 	// peer map lookup. Set before createEngine.
-	onDERPRecv func(regionID int, src key.NodePublic, pkt []byte) bool
+	onDERPRecv func(regionID tailcfg.DERPRegionID, src key.NodePublic, pkt []byte) bool
 
 	mu             sync.Mutex
 	clients        map[key.NodePublic]*tailcfg.Node // for the server
@@ -273,7 +273,7 @@ type locoBackend struct {
 	closeOnce      sync.Once
 }
 
-func (b *locoBackend) derpRegionID() int {
+func (b *locoBackend) derpRegionID() tailcfg.DERPRegionID {
 	if b.dm == nil {
 		panic("no derp map")
 	}
@@ -328,7 +328,7 @@ type Server struct {
 	// RegionID, if non-zero and Region is nil, is the ID of the DERP
 	// map region to use. If zero, the nearest region is picked based
 	// on latency at Start.
-	RegionID int
+	RegionID tailcfg.DERPRegionID
 
 	// DERPMapURL, if non-empty, is an alternate URL to fetch the DERP
 	// map from when Region is nil. If empty, [DefaultDERPMapURL] is
@@ -451,7 +451,7 @@ func (s *Server) Start() error {
 	sys.Set(store)
 
 	lb.isServer = true
-	lb.onDERPRecv = func(regionID int, src key.NodePublic, pkt []byte) bool {
+	lb.onDERPRecv = func(regionID tailcfg.DERPRegionID, src key.NodePublic, pkt []byte) bool {
 		if !IsMeowPacket(pkt) {
 			return false
 		}
@@ -743,7 +743,7 @@ func (lb *locoBackend) connBlob() ConnBlob {
 func (ci *ConnInfo) ConnBlob() ConnBlob {
 	w := &wireConnInfo{
 		ServerPublic: ci.ServerPublic,
-		RegionID:     ci.RegionID,
+		RegionID:     ci.RegionID.Int64(),
 	}
 	if !ci.ServerDiscoPublic.IsZero() {
 		w.ServerDiscoPublic = &ci.ServerDiscoPublic
@@ -840,7 +840,7 @@ func ParseConnBlob(cb ConnBlob) (ConnInfo, error) {
 	}
 	ci := ConnInfo{
 		ServerPublic: w.ServerPublic,
-		RegionID:     w.RegionID,
+		RegionID:     tailcfg.DERPRegionID(w.RegionID),
 	}
 	if w.ServerDiscoPublic != nil {
 		ci.ServerDiscoPublic = *w.ServerDiscoPublic
@@ -850,7 +850,7 @@ func ParseConnBlob(cb ConnBlob) (ConnInfo, error) {
 	}
 	for ri, r := range ci.Region {
 		if r.RegionID == 0 {
-			r.RegionID = ri + 1
+			r.RegionID = tailcfg.DERPRegionID(ri + 1)
 		}
 		if r.RegionCode == "" {
 			r.RegionCode = fmt.Sprint(r.RegionID)
@@ -1600,7 +1600,7 @@ func (c *Client) initLocked() error {
 		// endpoints so both sides can attempt a direct path.
 		lb.advertiseEndpoints()
 	})
-	lb.onDERPRecv = func(regionID int, src key.NodePublic, pkt []byte) bool {
+	lb.onDERPRecv = func(regionID tailcfg.DERPRegionID, src key.NodePublic, pkt []byte) bool {
 		if !IsMeowPacket(pkt) {
 			return false
 		}
