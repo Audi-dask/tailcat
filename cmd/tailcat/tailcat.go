@@ -736,7 +736,7 @@ func server(logf logger.Logf) {
 		clearUnnecessaryRegionFields(reg)
 		fmt.Fprintf(os.Stderr, "# Selected bootstrap relay region %v, %v\n", reg.RegionID, reg.RegionName)
 
-		ci = &tailcat.ConnInfo{ServerPublic: tailcat.NodePublic{NodePublic: priv.Public()}}
+		ci = new(tailcat.ConnInfo)
 		if embed {
 			ci.Region = []*tailcfg.DERPRegion{reg}
 		} else {
@@ -750,6 +750,8 @@ func server(logf logger.Logf) {
 			Region:       []*tailcfg.DERPRegion{reg},
 		}
 	}
+	ci.ServerPublic = tailcat.NodePublic{NodePublic: priv.Public()}
+	ci.ServerDiscoPublic = tailcat.DiscoPublicForNode(priv)
 	connStr := ci.ConnBlob()
 
 	s := &tailcat.Server{Key: priv, Logf: logf, Region: reg}

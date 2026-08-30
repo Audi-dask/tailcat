@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -424,6 +425,51 @@ func TestConnBlob(t *testing.T) {
 	}
 }
 
+func TestConnBlobSeparateDiscoKey(t *testing.T) {
+	priv := key.NewNode()
+	discoPub := DiscoPublicForNode(priv)
+	ci := ConnInfo{
+		ServerPublic:      NodePublic{priv.Public()},
+		ServerDiscoPublic: discoPub,
+		RegionID:          10,
+	}
+	got, err := ParseConnBlob(ci.ConnBlob())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.ServerDiscoPublic.Equal(discoPub) {
+		t.Fatalf("disco public key changed in round trip: got %v, want %v", got.ServerDiscoPublic, discoPub)
+	}
+	if got.ServerDiscoPublic.Raw32() == got.ServerPublic.Raw32() {
+		t.Fatal("server disco public key exposes the server node public key")
+	}
+	if again := DiscoPublicForNode(priv); !again.Equal(discoPub) {
+		t.Fatal("disco key derivation is not stable")
+	}
+	// Reproduce the report's reconstruction strategy: treating the public
+	// key visible in a direct-path disco frame as the server node key must
+	// not recover the connection address.
+	reconstructed := (&ConnInfo{
+		ServerPublic: NodePublic{key.NodePublicFromRaw32(mem.B(discoPub.AppendTo(nil)))},
+		RegionID:     ci.RegionID,
+	}).ConnBlob()
+	if reconstructed == ci.ConnBlob() {
+		t.Fatal("disco public key can reconstruct the connection address")
+	}
+}
+
+func TestClientRejectsLegacyConnBlob(t *testing.T) {
+	legacy := (&ConnInfo{
+		ServerPublic: NodePublic{key.NewNode().Public()},
+		RegionID:     10,
+	}).ConnBlob()
+	c := NewClient(legacy)
+	_, err := c.Ping(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "legacy server address") {
+		t.Fatalf("Ping error = %v; want legacy address rejection", err)
+	}
+}
+
 func TestParseConnBlobMalformedPublicKey(t *testing.T) {
 	for name, keyBytes := range map[string][]byte{
 		"short": make([]byte, key.NodePublicRawLen-1),
@@ -454,6 +500,27 @@ func TestParseConnBlobMalformedPublicKey(t *testing.T) {
 				_, err := ParseConnBlobRaw(cb)
 				return err
 			})
+		})
+	}
+}
+
+func TestParseConnBlobMalformedDiscoPublicKey(t *testing.T) {
+	for name, keyBytes := range map[string][]byte{
+		"short": make([]byte, key.DiscoPublicRawLen-1),
+		"long":  make([]byte, key.DiscoPublicRawLen+1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			raw, err := cbor.Marshal(map[string][]byte{
+				"p": key.NewNode().Public().AppendTo(nil),
+				"k": keyBytes,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cb := ConnBlob("tc" + base64.RawURLEncoding.EncodeToString(raw))
+			if _, err := ParseConnBlob(cb); err == nil {
+				t.Fatal("ParseConnBlob unexpectedly accepted malformed disco public key")
+			}
 		})
 	}
 }

@@ -88,7 +88,7 @@ func tailcatListen(this js.Value, args []js.Value) any {
 		if keyJSON == "" {
 			// Pin the picked region so a persisted key keeps the
 			// same address across page loads.
-			pk.Public = tailcat.ConnInfo{ServerPublic: pk.Public.ServerPublic, RegionID: reg.RegionID}
+			pk.Public.RegionID = reg.RegionID
 		}
 		blob := pk.Public.ConnBlob()
 		keyOut, err := json.Marshal(pk)

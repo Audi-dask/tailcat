@@ -451,11 +451,12 @@ ConnBlob internally). It looks like `tcXYZ...` and is a `"tc"` prefix
 followed by base64-encoded [CBOR](https://cbor.io/) containing:
 
 - The server's WireGuard public key (Curve25519, 32 bytes)
+- A separate path-discovery public key (Curve25519, 32 bytes)
 - DERP info. Either:
   1. a small integer referencing one of the default [Tailscale-run tailcat servers](https://tailcat.dev/derpmap.json), or
   2. full DERP server metadata, to either use a custom DERP server, or to avoid the client needing a potential round-trip to fetch the latest DERP map (the server's `--full-address` flag and the `tailcat resolve` subcommand produce this form)
 
-A typical token with just an integer region ID is around 50 bytes. With embedded
+A typical token with just an integer region ID is around 95 bytes. With embedded
 DERP node details it's longer but self-contained.
 
 ### Network stack
@@ -483,8 +484,10 @@ without the control plane.
    It then waits for clients.
 
 2. **Client parses the token** to learn the server's public key and
-   DERP region. It generates its own ephemeral keypair and connects to
-   the same DERP relay.
+   path-discovery key, plus its DERP region. It generates its own ephemeral
+   keypair and connects to the same DERP relay. The separate path-discovery
+   key can appear in cleartext direct-path disco frames without revealing the
+   WireGuard public key that acts as the unlisted connection capability.
 
 3. **Discovery handshake.** The client sends a "**Meow**" ping message
   to the server through the

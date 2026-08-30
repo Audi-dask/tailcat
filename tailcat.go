@@ -7,7 +7,7 @@
 //
 // A [Server] listens for incoming clients via a DERP relay. Clients discover
 // the server through a compact [ConnBlob] (connection blob) that encodes the
-// server's public key and DERP region. DERP is used only for the initial
+// server's WireGuard and path-discovery public keys and DERP region. DERP is used only for the initial
 // bootstrap; once both sides learn each other's endpoints, Tailscale's
 // magicsock layer upgrades to a direct peer-to-peer UDP path whenever possible,
 // just like the normal Tailscale data plane. DERP remains available as a
@@ -33,6 +33,8 @@ package tailcat
 import (
 	"cmp"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -136,11 +138,16 @@ type expandForServer struct{}
 // [ConnInfo]. A typical ConnBlob looks like "tcomFwWC…".
 type ConnBlob string
 
-// ConnInfo describes how to reach a server: its public key and which DERP
-// relay region to use. It is serialized into a [ConnBlob] for exchange,
+// ConnInfo describes how to reach a server: its WireGuard and path-discovery
+// public keys and which DERP relay region to use. It is serialized into a [ConnBlob] for exchange,
 // via the wire types in wire.go.
 type ConnInfo struct {
 	ServerPublic NodePublic // a key.NodePublic
+	// ServerDiscoPublic is the server's public key for path discovery.
+	// It is deliberately independent from ServerPublic: disco packets carry
+	// this key in cleartext on direct UDP paths, while ServerPublic is the
+	// unguessable part of the server's connection address.
+	ServerDiscoPublic DiscoPublic // a key.DiscoPublic
 
 	// Region, if non-empty, lists the regions of a DERPMap.
 	// Either Region or RegionID must be set. If Region is set
@@ -165,6 +172,31 @@ type ConnInfo struct {
 // smaller CBOR representation without the "np" prefix.
 type NodePublic struct {
 	key.NodePublic
+}
+
+// DiscoPublic is a wrapper around key.DiscoPublic that uses its raw 32-byte
+// representation in connection blobs.
+type DiscoPublic struct {
+	key.DiscoPublic
+}
+
+// Equal reports whether a and b represent the same disco public key.
+func (a DiscoPublic) Equal(b DiscoPublic) bool {
+	return a.DiscoPublic == b.DiscoPublic
+}
+
+// MarshalBinary implements encoding.BinaryMarshaler.
+func (p DiscoPublic) MarshalBinary() ([]byte, error) {
+	return p.DiscoPublic.AppendTo(nil), nil
+}
+
+// UnmarshalBinary implements encoding.BinaryUnmarshaler.
+func (p *DiscoPublic) UnmarshalBinary(x []byte) error {
+	if len(x) != key.DiscoPublicRawLen {
+		return fmt.Errorf("invalid disco public key length %d, want %d", len(x), key.DiscoPublicRawLen)
+	}
+	p.DiscoPublic = key.DiscoPublicFromRaw32(go4mem.B(x))
+	return nil
 }
 
 // MarshalBinary implements encoding.BinaryMarshaler for CBOR serialization,
@@ -203,6 +235,7 @@ func NewPrivateKey() *PrivateKey {
 		Private: key.NewNode(),
 	}
 	ret.Public.ServerPublic = NodePublic{ret.Private.Public()}
+	ret.Public.ServerDiscoPublic = DiscoPublic{discoPrivateForNode(ret.Private).Public()}
 	return ret
 }
 
@@ -211,16 +244,17 @@ func NewPrivateKey() *PrivateKey {
 // but there's no controlclient involved, because there's
 // no control plane.
 type locoBackend struct {
-	sys        tsd.System
-	priv       key.NodePrivate
-	pub        key.NodePublic
-	addr       netip.Addr
-	addrPrefix netip.Prefix
-	ns         *netstack.Impl
-	dm         *tailcfg.DERPMap
-	logf       logger.Logf
-	serverPub  key.NodePublic // non-zero if we're a client (server's public key)
-	isServer   bool
+	sys            tsd.System
+	priv           key.NodePrivate
+	pub            key.NodePublic
+	addr           netip.Addr
+	addrPrefix     netip.Prefix
+	ns             *netstack.Impl
+	dm             *tailcfg.DERPMap
+	logf           logger.Logf
+	serverPub      key.NodePublic  // non-zero if we're a client (server's public key)
+	serverDiscoPub key.DiscoPublic // non-zero if we're a client (server's disco key)
+	isServer       bool
 
 	// discoPublic returns the node's disco public key, memoized to
 	// avoid redoing the curve25519 derivation for every client that
@@ -675,9 +709,7 @@ func newLocoBackend(priv key.NodePrivate) *locoBackend {
 		addr:       addr,
 		addrPrefix: addrPrefix,
 	}
-	lb.discoPublic = sync.OnceValue(func() key.DiscoPublic {
-		return nodePrivateAsDiscoPrivate(lb.priv).Public()
-	})
+	lb.discoPublic = sync.OnceValue(func() key.DiscoPublic { return discoPrivateForNode(lb.priv).Public() })
 	return lb
 }
 
@@ -689,6 +721,7 @@ func (lb *locoBackend) connBlob() ConnBlob {
 	}
 	var ci ConnInfo
 	ci.ServerPublic = NodePublic{lb.pub}
+	ci.ServerDiscoPublic = DiscoPublic{lb.discoPublic()}
 	for _, r := range lb.dm.Regions {
 		ci.Region = append(ci.Region, r)
 	}
@@ -711,6 +744,9 @@ func (ci *ConnInfo) ConnBlob() ConnBlob {
 	w := &wireConnInfo{
 		ServerPublic: ci.ServerPublic,
 		RegionID:     ci.RegionID,
+	}
+	if !ci.ServerDiscoPublic.IsZero() {
+		w.ServerDiscoPublic = &ci.ServerDiscoPublic
 	}
 	for _, r := range ci.Region {
 		wr := wireRegionOf(r)
@@ -805,6 +841,9 @@ func ParseConnBlob(cb ConnBlob) (ConnInfo, error) {
 	ci := ConnInfo{
 		ServerPublic: w.ServerPublic,
 		RegionID:     w.RegionID,
+	}
+	if w.ServerDiscoPublic != nil {
+		ci.ServerDiscoPublic = *w.ServerDiscoPublic
 	}
 	for _, wr := range w.Region {
 		ci.Region = append(ci.Region, wr.derpRegion())
@@ -1180,7 +1219,7 @@ func (b *locoBackend) advertiseEndpoints() {
 		return
 	}
 	payload := (&disco.CallMeMaybe{MyNumber: eps}).AppendMarshal(nil)
-	discoPriv := nodePrivateAsDiscoPrivate(b.priv)
+	discoPriv := discoPrivateForNode(b.priv)
 	mc := b.sys.MagicSock.Get()
 	regionID := b.derpRegionID()
 	for _, p := range peers {
@@ -1261,7 +1300,7 @@ func (lb *locoBackend) Start() error {
 			Name:       "server.tailcat.",
 			User:       100,
 			Key:        lb.serverPub,
-			DiscoKey:   nodePublicAsDiscoPublic(lb.serverPub),
+			DiscoKey:   lb.serverDiscoPub,
 			Addresses:  []netip.Prefix{serverAddrPrefix},
 			AllowedIPs: []netip.Prefix{serverAddrPrefix, allIPv6},
 			HomeDERP:   derpRegion,
@@ -1423,13 +1462,13 @@ func createEngine(logf logger.Logf, lb *locoBackend) (err error) {
 	if lb.isServer {
 		conf.DERPAppName = "tailcat-server"
 	}
-	// Both sides force their disco key to be derived from their node
-	// key. For the server, that lets clients predict its disco key
-	// from the ConnBlob without extra round trips. And knowing our own
-	// disco private key is what lets either side seal the
+	// Both sides deterministically derive a separate disco key from their
+	// node private key. The public disco key, unlike the node key, is safe to
+	// expose in direct-path disco frames. Knowing our own disco private key
+	// is what lets either side seal the
 	// call-me-maybe messages that advertise our UDP endpoints (see
 	// locoBackend.advertiseEndpoints).
-	conf.ForceDiscoKey = nodePrivateAsDiscoPrivate(lb.priv)
+	conf.ForceDiscoKey = discoPrivateForNode(lb.priv)
 	netns.SetEnabled(false)
 	e, err := wgengine.NewUserspaceEngine(logf, conf)
 	if err != nil {
@@ -1524,11 +1563,15 @@ func (c *Client) initLocked() error {
 	if err != nil {
 		return err
 	}
+	if ci.ServerDiscoPublic.IsZero() {
+		return errors.New("legacy server address lacks a separate disco key; generate a new address with an updated tailcat server")
+	}
 
 	lb := newLocoBackend(c.nodeKeyLocked())
 	lb.logf = logf
 	lb.dm = &tailcfg.DERPMap{}
 	lb.serverPub = ci.ServerPublic.NodePublic
+	lb.serverDiscoPub = ci.ServerDiscoPublic.DiscoPublic
 
 	sys := &lb.sys
 	bus := eventbus.New()
@@ -1876,18 +1919,25 @@ func (s *Server) Status() *ipnstate.Status {
 	return s.lb.Status()
 }
 
-// nodePrivateAsDiscoPrivate converts a NodePrivate to a DiscoPrivate by
-// reusing the same raw key bytes. This is used in tailcat where the server
-// uses its node key as the disco key.
-func nodePrivateAsDiscoPrivate(k key.NodePrivate) key.DiscoPrivate {
+// discoPrivateForNode deterministically derives a path-discovery key from a
+// node private key. Keeping the two public keys unlinkable is a security
+// boundary: disco frames expose the disco public key on the local network,
+// while knowledge of the node public key grants access to an open server.
+func discoPrivateForNode(k key.NodePrivate) key.DiscoPrivate {
 	raw := k.Raw32()
-	return key.DiscoPrivateFromRaw32(go4mem.B(raw[:]))
+	mac := hmac.New(sha256.New, raw[:])
+	mac.Write([]byte("github.com/tailscale/tailcat disco key v1"))
+	discoRaw := mac.Sum(nil)
+	// Canonicalize the Curve25519 scalar, as key.NewDisco does.
+	discoRaw[0] &= 248
+	discoRaw[31] &= 127
+	discoRaw[31] |= 64
+	return key.DiscoPrivateFromRaw32(go4mem.B(discoRaw))
 }
 
-// nodePublicAsDiscoPublic converts a NodePublic to a DiscoPublic by
-// reusing the same raw key bytes. This is used in tailcat where the
-// server's node public key doubles as its disco public key.
-func nodePublicAsDiscoPublic(k key.NodePublic) key.DiscoPublic {
-	raw := k.Raw32()
-	return key.DiscoPublicFromRaw32(go4mem.B(raw[:]))
+// DiscoPublicForNode returns the path-discovery public key derived from a
+// node private key. Code constructing a [ConnInfo] directly must include it
+// as ConnInfo.ServerDiscoPublic.
+func DiscoPublicForNode(k key.NodePrivate) DiscoPublic {
+	return DiscoPublic{discoPrivateForNode(k).Public()}
 }
