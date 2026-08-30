@@ -53,6 +53,12 @@ $ nix run github:tailscale/tailcat
 $ nix profile install github:tailscale/tailcat
 ```
 
+Or run the container image (published for each tagged release):
+
+```sh
+$ docker run --rm -it ghcr.io/tailscale/tailcat:latest
+```
+
 ## Usage
 
 ### Pipe stdin/stdout between two machines

@@ -29,6 +29,12 @@ Each release contains:
 * Windows binaries (zip) for amd64 and arm64
 * `checksums.txt` with SHA-256 checksums of the above
 
+Each release also pushes container images (amd64 and arm64) to
+[ghcr.io/tailscale/tailcat](https://github.com/tailscale/tailcat/pkgs/container/tailcat), tagged
+both `vX.Y.Z` and `latest`. The image is the static binary in a
+[distroless](https://github.com/GoogleContainerTools/distroless) base
+image; see `Dockerfile.goreleaser`.
+
 The binary version is embedded at build time via `-ldflags -X
 main.version=...`; `tailcat --version` prints it. Builds made with
 `go install github.com/tailscale/tailcat/cmd/tailcat@vX.Y.Z` instead
@@ -43,4 +49,8 @@ To build everything without tagging or publishing, install
 goreleaser release --snapshot --clean
 ```
 
-The artifacts land in `dist/` (which is gitignored).
+The artifacts land in `dist/` (which is gitignored). In snapshot mode
+the container images are built into the local Docker daemon as
+separate per-platform tags rather than a multi-arch manifest, and
+nothing is pushed. Building them requires a buildx builder with the
+docker-container driver (`docker buildx create --use`).
