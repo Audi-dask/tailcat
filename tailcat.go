@@ -401,6 +401,7 @@ func (s *Server) Start() error {
 		logf(format, args...)
 	})
 	if err != nil {
+		lb.Close() // closes the subsystems started so far
 		return fmt.Errorf("netmon.New: %w", err)
 	}
 	sys.Set(netMon)
@@ -435,10 +436,12 @@ func (s *Server) Start() error {
 	}
 
 	if err := createEngine(logf, lb); err != nil {
+		lb.Close()
 		return fmt.Errorf("createEngine: %w", err)
 	}
 	ns, err := newNetstack(logf, sys)
 	if err != nil {
+		lb.Close()
 		return fmt.Errorf("newNetstack: %w", err)
 	}
 	ns.ProcessLocalIPs = true
@@ -479,7 +482,12 @@ func (s *Server) Start() error {
 
 	s.lb = lb
 	sys.Engine.Get().SetFilter(s.buildFilter())
-	return lb.Start()
+	if err := lb.Start(); err != nil {
+		s.lb = nil
+		lb.Close()
+		return err
+	}
+	return nil
 }
 
 var allTCPPorts = filter.PortRange{First: 0, Last: 65535}
@@ -1479,6 +1487,7 @@ func (c *Client) initLocked() error {
 		logf(format, args...)
 	})
 	if err != nil {
+		lb.Close() // closes the subsystems started so far
 		return fmt.Errorf("netmon.New: %w", err)
 	}
 	sys.Set(netMon)
@@ -1508,10 +1517,12 @@ func (c *Client) initLocked() error {
 	}
 
 	if err := createEngine(logf, lb); err != nil {
+		lb.Close()
 		return fmt.Errorf("createEngine: %w", err)
 	}
 	ns, err := newNetstack(logf, sys)
 	if err != nil {
+		lb.Close()
 		return fmt.Errorf("newNetstack: %w", err)
 	}
 	ns.ProcessLocalIPs = true // required to even reply to TCP SYNs client sends out
