@@ -153,10 +153,7 @@ func TestClassifySOCKSAddr(t *testing.T) {
 // test existed, socks mode ignored --key and could never reach a
 // server locked down with --allow (issue #24).
 func TestSOCKSClientKey(t *testing.T) {
-	bin := filepath.Join(t.TempDir(), "tailcat")
-	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, out)
-	}
+	bin := buildTailcatTestBinary(t)
 
 	dm := integration.RunDERPAndSTUN(t, t.Logf, "127.0.0.1")
 	dmJSON, err := json.Marshal(dm)
@@ -206,7 +203,8 @@ func TestSOCKSClientKey(t *testing.T) {
 	// The socks client pings the server before starting the proxy and
 	// exits non-zero if the ping fails, so a successful run of a
 	// trivial child command proves the allowlisted handshake worked.
-	client := exec.Command(bin, "--key="+clientKey, "--derpmap-url="+dmSrv.URL, "socks", blob, "true")
+	args := append([]string{"--key=" + clientKey, "--derpmap-url=" + dmSrv.URL, "socks", blob}, testNoopCommand()...)
+	client := exec.Command(bin, args...)
 	client.Env = append(os.Environ(), cacheEnv(t)...)
 	if out, err := client.CombinedOutput(); err != nil {
 		t.Fatalf("socks with allowlisted --key failed: %v\n%s", err, out)
