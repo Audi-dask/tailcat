@@ -57,6 +57,7 @@ import (
 	go4mem "go4.org/mem"
 	"go4.org/netipx"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 	"tailscale.com/disco"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
@@ -578,6 +579,54 @@ func (s *Server) DrainTCP(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// DrainTCP waits until none of the client's TCP connections have
+// segments left to send or retransmit. It returns nil once drained,
+// or ctx's error.
+//
+// It is meant to be called after the last connection has been closed
+// or has reached EOF. Like [Server.DrainTCP], it exists because the
+// whole TCP stack runs inside this process: a client that reads the
+// server's EOF and exits immediately can lose the final ACK of the
+// server's FIN before it is ever transmitted, leaving the server
+// retransmitting its FIN to a dead peer until it gives up.
+func (c *Client) DrainTCP(ctx context.Context) error {
+	for {
+		busy := false
+		for _, ep := range tcpipStackOf(c.lb.ns).RegisteredEndpoints() {
+			se, ok := ep.(interface{ State() uint32 })
+			if !ok {
+				continue
+			}
+			switch tcp.EndpointState(se.State()) {
+			case tcp.StateSynSent, tcp.StateSynRecv, tcp.StateEstablished,
+				tcp.StateFinWait1, tcp.StateClosing, tcp.StateCloseWait, tcp.StateLastAck:
+				busy = true
+			}
+		}
+		if !busy {
+			// Quiesced endpoint states confirm our FINs were acked,
+			// but a final ACK we owe the peer (of its FIN, as an
+			// endpoint enters TIME-WAIT) is emitted asynchronously by
+			// the endpoint's protocol goroutine and isn't observable
+			// here. Linger briefly so it can make it out through the
+			// WireGuard pipeline before the caller exits the process;
+			// losing it wouldn't lose the peer data, just leave the
+			// peer retransmitting its FIN until it gives up.
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(50 * time.Millisecond):
+			}
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Millisecond):
+		}
+	}
 }
 
 // tcpipStackOf returns ns's unexported gVisor *stack.Stack.

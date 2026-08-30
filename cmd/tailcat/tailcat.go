@@ -460,6 +460,15 @@ func clientMode(logf logger.Logf, connStr, optDest string) {
 	if _, err := io.Copy(os.Stdout, c); err != nil {
 		log.Fatal(err)
 	}
+
+	// The EOF above means the server closed. Our netstack acks its
+	// FIN, but the ack starts in this process and exiting right away
+	// can discard it before it's transmitted, leaving the server
+	// retransmitting its FIN to nobody until it gives up. Wait for
+	// the ack to drain, with a cap in case the server is gone.
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer drainCancel()
+	cl.DrainTCP(drainCtx)
 }
 
 // normalizeListenAddrPort fills in the missing parts of the --listen
