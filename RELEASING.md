@@ -9,14 +9,22 @@ Release with a changelog generated from the commit log.
 ## Cutting a release
 
 1. Make sure the Test workflow is green on `main`.
-2. Tag and push:
+2. Run the release script, which creates an SSH-signed annotated tag
+   after checking that the tag doesn't already exist on origin (a tag
+   that exists only locally is replaced). It requires git's
+   `user.signingkey` to be set to your SSH public key.
 
    ```sh
-   git tag v0.1.0
+   ./tag.sh v0.1.0
+   ```
+
+3. Push the tag as the script instructs:
+
+   ```sh
    git push origin v0.1.0
    ```
 
-3. Watch the Release workflow in the Actions tab. When it finishes,
+4. Watch the Release workflow in the Actions tab. When it finishes,
    the release with all artifacts appears on the
    [Releases page](https://github.com/tailscale/tailcat/releases).
 
