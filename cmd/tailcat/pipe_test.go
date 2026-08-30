@@ -19,6 +19,88 @@ import (
 	"tailscale.com/tstest/integration"
 )
 
+// cacheEnv returns environment variables that point os.UserCacheDir
+// at a temp dir on all operating systems, so test runs don't litter
+// the real user cache with DERP map entries keyed by a test's
+// ephemeral --derpmap-url.
+func cacheEnv(t *testing.T) []string {
+	dir := t.TempDir()
+	return []string{
+		"XDG_CACHE_HOME=" + dir, // Linux
+		"HOME=" + dir,           // macOS
+		"LocalAppData=" + dir,   // Windows
+	}
+}
+
+// TestLocalDERPMode runs the built tailcat binary in server mode with
+// TS_DEBUG_TAILCAT_LOCAL_DERP=1, which starts a DERP server on
+// localhost and embeds it in the address blob, then round-trips a
+// payload from a client using that blob. Both sides get a
+// --derpmap-url pointing at an unreachable address to prove the whole
+// exchange is hermetic. The Homebrew formula test relies on this mode
+// (plus TAILCAT_ADDR_FILE) to test the bottles without network
+// access, so it must not regress.
+func TestLocalDERPMode(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "tailcat")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+
+	const derpMapURL = "http://127.0.0.1:9/unreachable"
+	addrFile := filepath.Join(t.TempDir(), "addr")
+
+	server := exec.Command(bin, "--key=new", "--derpmap-url="+derpMapURL)
+	server.Env = append(append(os.Environ(), cacheEnv(t)...),
+		"TS_DEBUG_TAILCAT_LOCAL_DERP=1",
+		"TAILCAT_ADDR_FILE="+addrFile)
+	var serverOut, serverErr bytes.Buffer
+	server.Stdout = &serverOut
+	server.Stderr = &serverErr
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer server.Process.Kill()
+
+	var blob string
+	deadline := time.Now().Add(30 * time.Second)
+	for blob == "" {
+		if time.Now().After(deadline) {
+			t.Fatalf("timeout waiting for addr file; server stderr:\n%s", serverErr.String())
+		}
+		b, err := os.ReadFile(addrFile)
+		if err == nil && len(b) > 0 {
+			blob = strings.TrimSpace(string(b))
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Logf("server blob: %s", blob)
+
+	const payload = "hello hermetic world"
+	client := exec.Command(bin, "--key=new", "--derpmap-url="+derpMapURL, blob)
+	client.Env = append(os.Environ(), cacheEnv(t)...)
+	client.Stdin = strings.NewReader(payload)
+	var clientErr bytes.Buffer
+	client.Stderr = &clientErr
+	if err := client.Run(); err != nil {
+		t.Fatalf("client: %v\nclient stderr:\n%s", err, clientErr.String())
+	}
+
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Wait() }()
+	select {
+	case err := <-serverDone:
+		if err != nil {
+			t.Fatalf("server exited with error: %v\nserver stderr:\n%s", err, serverErr.String())
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatalf("server did not exit within 15s of the transfer completing\nserver stderr:\n%s", serverErr.String())
+	}
+	if got := serverOut.String(); got != payload {
+		t.Errorf("server got %q; want %q", got, payload)
+	}
+}
+
 // TestPipeMode runs the built tailcat binary in its two stdin/stdout
 // pipe modes against a local DERP server, emulating a pipeline like
 // "tailcat | tar -zx" on the server side and "tar -zc | tailcat
@@ -45,18 +127,8 @@ func TestPipeMode(t *testing.T) {
 
 	addrFile := filepath.Join(t.TempDir(), "addr")
 
-	// Point os.UserCacheDir at a temp dir so test runs don't litter
-	// the real user cache with DERP map entries keyed by this test's
-	// ephemeral --derpmap-url.
-	cacheDir := t.TempDir()
-	cacheEnv := []string{
-		"XDG_CACHE_HOME=" + cacheDir, // Linux
-		"HOME=" + cacheDir,           // macOS
-		"LocalAppData=" + cacheDir,   // Windows
-	}
-
 	server := exec.Command(bin, "--key=new", "--derpmap-url="+dmSrv.URL)
-	server.Env = append(append(os.Environ(), cacheEnv...), "TAILCAT_ADDR_FILE="+addrFile)
+	server.Env = append(append(os.Environ(), cacheEnv(t)...), "TAILCAT_ADDR_FILE="+addrFile)
 	serverOut, err := server.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +156,7 @@ func TestPipeMode(t *testing.T) {
 	t.Logf("server blob: %s", blob)
 
 	client := exec.Command(bin, "--key=new", "--derpmap-url="+dmSrv.URL, blob)
-	client.Env = append(os.Environ(), cacheEnv...)
+	client.Env = append(os.Environ(), cacheEnv(t)...)
 	const payload = "pretend this is a tarball"
 	client.Stdin = strings.NewReader(payload)
 	var clientOut, clientErr bytes.Buffer

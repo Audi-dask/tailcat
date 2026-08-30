@@ -38,6 +38,7 @@ import (
 	"tailscale.com/derp/derpserver"
 	"tailscale.com/envknob"
 	"tailscale.com/net/socks5"
+	"tailscale.com/net/stun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -687,9 +688,10 @@ func server(logf logger.Logf) {
 	}
 
 	var reg *tailcfg.DERPRegion
+	var devDERP *derpserver.Server
 	if envknob.Bool("TS_DEBUG_TAILCAT_LOCAL_DERP") {
 		log.Printf("Local DERP mode.")
-		reg = runDevDERP(logger.WithPrefix(logf, "[dev-derp] "))
+		devDERP, reg = runDevDERP(logger.WithPrefix(logf, "[dev-derp] "))
 	}
 
 	var priv key.NodePrivate
@@ -739,6 +741,13 @@ func server(logf logger.Logf) {
 			ci.Region = []*tailcfg.DERPRegion{reg}
 		} else {
 			ci.RegionID = reg.RegionID
+		}
+	} else {
+		// The local dev DERP region has no public DERP map region ID
+		// to reference, so the address must embed it.
+		ci = &tailcat.ConnInfo{
+			ServerPublic: tailcat.NodePublic{NodePublic: priv.Public()},
+			Region:       []*tailcfg.DERPRegion{reg},
 		}
 	}
 	connStr := ci.ConnBlob()
@@ -831,6 +840,20 @@ func server(logf logger.Logf) {
 
 	if err := s.Start(); err != nil {
 		log.Fatalf("Server.Start: %v", err)
+	}
+	if devDERP != nil {
+		// Wait until we're connected to our own dev DERP before
+		// publishing the address, so a client that acts on it
+		// immediately can reach us. Without this, the client's first
+		// packets get dropped by the relay and tests get slow or
+		// flaky waiting for retransmits.
+		deadline := time.Now().Add(30 * time.Second)
+		for !devDERP.IsClientConnectedForTest(priv.Public()) {
+			if time.Now().After(deadline) {
+				log.Fatalf("timeout waiting for connection to local dev DERP")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
 	if *flagKey == "new" {
 		fmt.Fprintf(os.Stderr, "# 🐈 Server listening with new address: %v\n", connStr)
@@ -939,7 +962,7 @@ func portRanges(sorted []uint16) (ret []filter.PortRange) {
 	return ret
 }
 
-func runDevDERP(logf logger.Logf) *tailcfg.DERPRegion {
+func runDevDERP(logf logger.Logf) (*derpserver.Server, *tailcfg.DERPRegion) {
 	d := derpserver.New(key.NewNode(), logf)
 	ln, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
@@ -954,7 +977,30 @@ func runDevDERP(logf logger.Logf) *tailcfg.DERPRegion {
 	httpsrv.Config.TLSNextProto = make(map[string]func(*http.Server, *tls.Conn, http.Handler))
 	httpsrv.StartTLS()
 
-	return &tailcfg.DERPRegion{
+	// Also serve STUN. Without it, netcheck burns ~3 seconds timing
+	// out on UDP probes before it declares a report, which delays the
+	// server's home DERP connection and thus its readiness.
+	uln, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		panic(err)
+	}
+	logf("starting dev STUN on %v ...", uln.LocalAddr())
+	go func() {
+		var buf [1500]byte
+		for {
+			n, src, err := uln.ReadFromUDPAddrPort(buf[:])
+			if err != nil {
+				return
+			}
+			txid, err := stun.ParseBindingRequest(buf[:n])
+			if err != nil {
+				continue
+			}
+			uln.WriteToUDPAddrPort(stun.Response(txid, src), src)
+		}
+	}()
+
+	return d, &tailcfg.DERPRegion{
 		RegionID:   1,
 		RegionCode: "D",
 		Nodes: []*tailcfg.DERPNode{
@@ -963,8 +1009,8 @@ func runDevDERP(logf logger.Logf) *tailcfg.DERPRegion {
 				RegionID:         1,
 				HostName:         "T",
 				IPv4:             "127.0.0.1",
-				IPv6:             "-",
-				STUNPort:         -1, // no STUN server in dev DERP mode
+				IPv6:             "none", // netcheck's magic "no v6 probes" value; other values leave doomed probes running until its 3s timeout
+				STUNPort:         uln.LocalAddr().(*net.UDPAddr).Port,
 				DERPPort:         httpsrv.Listener.Addr().(*net.TCPAddr).Port,
 				InsecureForTests: true,
 			},
