@@ -42,6 +42,24 @@ support ([#4](https://github.com/tailscale/tailcat/issues/4)).
 
 ## Install
 
+Prebuilt binaries are on the
+[Releases page](https://github.com/tailscale/tailcat/releases): static
+Linux binaries (tar.gz) plus Debian (.deb) and RPM (.rpm) packages for
+amd64, arm64, and armv7, and Windows binaries (zip) for amd64 and
+arm64.
+
+There's also a
+[container image](https://github.com/tailscale/tailcat/pkgs/container/tailcat):
+
+```sh
+$ docker pull ghcr.io/tailscale/tailcat:v0.1.0  # or :latest
+$ docker run --rm -it ghcr.io/tailscale/tailcat:latest
+```
+
+For macOS, we hope to be in Homebrew soon
+([#28](https://github.com/tailscale/tailcat/issues/28)); until then,
+build from source with a Go toolchain:
+
 ```sh
 $ go install github.com/tailscale/tailcat/cmd/tailcat@latest
 ```
@@ -51,12 +69,6 @@ Or with Nix flakes, run it directly or install it:
 ```sh
 $ nix run github:tailscale/tailcat
 $ nix profile install github:tailscale/tailcat
-```
-
-Or run the container image (published for each tagged release):
-
-```sh
-$ docker run --rm -it ghcr.io/tailscale/tailcat:latest
 ```
 
 ## Usage
