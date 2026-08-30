@@ -4,11 +4,22 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
+
+	"tailscale.com/tstest/integration"
 )
 
 func TestClassifySOCKSAddr(t *testing.T) {
@@ -133,6 +144,82 @@ func TestClassifySOCKSAddr(t *testing.T) {
 				t.Fatalf("classifySOCKSAddr(%q) = %+v; want %+v", tt.addr, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestSOCKSClientKey verifies that "tailcat socks" presents the
+// --key client identity rather than a fresh ephemeral node key, by
+// connecting to a server that only allows that identity. Before this
+// test existed, socks mode ignored --key and could never reach a
+// server locked down with --allow (issue #24).
+func TestSOCKSClientKey(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "tailcat")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+
+	dm := integration.RunDERPAndSTUN(t, t.Logf, "127.0.0.1")
+	dmJSON, err := json.Marshal(dm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dmSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(dmJSON)
+	}))
+	defer dmSrv.Close()
+
+	// Point os.UserCacheDir at a temp dir so test runs don't litter
+	// the real user cache with DERP map entries keyed by this test's
+	// ephemeral --derpmap-url.
+	cacheDir := t.TempDir()
+	cacheEnv := []string{
+		"XDG_CACHE_HOME=" + cacheDir, // Linux
+		"HOME=" + cacheDir,           // macOS
+		"LocalAppData=" + cacheDir,   // Windows
+	}
+
+	clientKey := filepath.Join(t.TempDir(), "c.private.json")
+	if out, err := exec.Command(bin, "genkey", "--client", "--key="+clientKey).CombinedOutput(); err != nil {
+		t.Fatalf("genkey: %v\n%s", err, out)
+	}
+	pub, err := exec.Command(bin, "--key="+clientKey, "printpub").Output()
+	if err != nil {
+		t.Fatalf("printpub: %v", err)
+	}
+	cpub := strings.TrimSpace(string(pub))
+
+	addrFile := filepath.Join(t.TempDir(), "addr")
+	server := exec.Command(bin, "--key=new", "--derpmap-url="+dmSrv.URL, "--serve=all", "--allow="+cpub)
+	server.Env = append(append(os.Environ(), cacheEnv...), "TAILCAT_ADDR_FILE="+addrFile)
+	var serverErr bytes.Buffer
+	server.Stderr = &serverErr
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer server.Process.Kill()
+
+	var blob string
+	deadline := time.Now().Add(30 * time.Second)
+	for blob == "" {
+		if time.Now().After(deadline) {
+			t.Fatalf("timeout waiting for addr file; server stderr:\n%s", serverErr.String())
+		}
+		b, err := os.ReadFile(addrFile)
+		if err == nil && len(b) > 0 {
+			blob = strings.TrimSpace(string(b))
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Logf("server blob: %s", blob)
+
+	// The socks client pings the server before starting the proxy and
+	// exits non-zero if the ping fails, so a successful run of a
+	// trivial child command proves the allowlisted handshake worked.
+	client := exec.Command(bin, "--key="+clientKey, "--derpmap-url="+dmSrv.URL, "socks", blob, "true")
+	client.Env = append(os.Environ(), cacheEnv...)
+	if out, err := client.CombinedOutput(); err != nil {
+		t.Fatalf("socks with allowlisted --key failed: %v\n%s", err, out)
 	}
 }
 

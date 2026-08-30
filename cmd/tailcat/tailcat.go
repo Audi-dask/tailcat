@@ -508,9 +508,13 @@ func clientSOCKSMode(logf logger.Logf) {
 	}
 	progArgs := args
 
+	// Resolve the client key once so every server dialed by this
+	// proxy sees the same identity, matching the other client modes.
+	clientPriv := clientKey()
+
 	var cl *tailcat.Client
 	if blob != "" {
-		cl = newClient(logf, blob, key.NewNode())
+		cl = newClient(logf, blob, clientPriv)
 		pi, err := cl.Ping(context.Background())
 		if err != nil {
 			log.Fatalf("tailcat Ping: %v", err)
@@ -529,7 +533,7 @@ func clientSOCKSMode(logf logger.Logf) {
 		if c, ok := clients[b]; ok {
 			return c
 		}
-		c := newClient(logf, b, key.NewNode())
+		c := newClient(logf, b, clientPriv)
 		clients[b] = c
 		return c
 	}
