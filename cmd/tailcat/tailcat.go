@@ -55,7 +55,6 @@ var (
 	flagAllow       *string
 	flagFiles       *string
 	flagVerbose     *bool
-	flagVersion     *bool
 	flagFullAddress *bool
 	flagJSON        *bool
 	flagDERPMapURL  *string
@@ -90,7 +89,6 @@ func newRootCommand() *ff.Command {
 	flagServe = rootFS.StringLong("serve", "", "comma-separated list of port numbers, port ranges, or service names to serve; the same list the serve subcommand takes as arguments. Service names are: 'all' (serve all ports), 'exit-node' (run an exit node for all addresses), 'no-auth-ssh' (auth-free SSH server), 'files' (file server for SFTP clients; see serve's --files flag). If empty, it accepts a single connection on any port, writes it to stdout, and exits.")
 	flagKey = rootFS.StringLong("key", "", "'new' for an ephemeral key. If empty, the default saved key is used if it exists ('default' in server mode, 'client-default' in client modes; see genkey), else an ephemeral key. Otherwise the path to a *.private.json or a name like 'foo' to read it from $CONFIG/tailcat/keys/foo.private.json")
 	flagVerbose = rootFS.BoolLong("verbose", "be verbose")
-	flagVersion = rootFS.BoolLong("version", "print the tailcat version and exit")
 	flagJSON = rootFS.BoolLong("json", "in server mode, write {\"listenAddr\": ...} JSON to stdout")
 	flagDERPMapURL = rootFS.StringLong("derpmap-url", tailcat.DefaultDERPMapURL, "URL of the JSON DERP map used to resolve or auto-select a DERP region")
 
@@ -230,7 +228,7 @@ func newRootCommand() *ff.Command {
 			{
 				Name:      "version",
 				Usage:     "tailcat version",
-				ShortHelp: "print the tailcat version (like --version)",
+				ShortHelp: "print the tailcat version",
 				Exec: func(ctx context.Context, args []string) error {
 					fmt.Println(versionString())
 					return nil
@@ -571,13 +569,16 @@ func usagef(format string, args ...any) error {
 func main() {
 	root := newRootCommand()
 	err := root.Parse(os.Args[1:])
+	if err != nil && slices.Contains(os.Args[1:], "--version") {
+		// The advertised way to get the version is the version
+		// subcommand, but nixpkgs' versionCheckHook runs "tailcat
+		// --version", so keep that working as an unadvertised alias.
+		// It's not a registered flag, so it only shows up here as a
+		// parse failure.
+		fmt.Println(versionString())
+		return
+	}
 	if err == nil {
-		// The --version flag short-circuits everything else,
-		// including subcommand dispatch.
-		if *flagVersion {
-			fmt.Println(versionString())
-			return
-		}
 		if *flagVerbose {
 			tailcat.Verbose = true
 		}
