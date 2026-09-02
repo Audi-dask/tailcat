@@ -151,6 +151,25 @@ HTTP/1.1 200 OK
 ....
 ```
 
+### Forward local ports to a tailcat server
+
+To make ports served by a tailcat server available as ordinary local TCP ports (for browsers, database clients, or other tools that do not support SOCKS or stdio), run `forward` with the server's address token:
+
+```sh
+$ tailcat serve 8080,3306
+# 🐈 Server listening with new address: tcXXXXXXXXX
+
+$ tailcat forward tcXXXXXXXXX 18080:8080 3306
+```
+
+By default, listeners bind to `127.0.0.1` and diagnostic logs are suppressed. Pass `--verbose` before the subcommand to enable verbose networking logs. Use `--bind=0.0.0.0` only when clients on other machines should be able to connect:
+
+```sh
+$ tailcat forward --bind=0.0.0.0 tcXXXXXXXXX 18080:8080
+```
+
+Press Ctrl-C to stop forwarding.
+
 ### Auth-free SSH server
 
 On Linux and macOS, you can run an SSH server too with no auth. (If you want auth, you can just `tailcat serve 22` and proxy to your system SSH server)

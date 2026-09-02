@@ -21,7 +21,7 @@ func TestHelpListsCommandTree(t *testing.T) {
 	help := ffhelp.Command(newRootCommand()).String()
 	for _, want := range []string{
 		"serve", "recv", "ping", "socks", "ssh", "cp", "parse", "resolve",
-		"genkey", "printpub", "version", "readme",
+		"forward", "genkey", "printpub", "version", "readme",
 		"--serve", "--key", "--derpmap-url",
 	} {
 		if !strings.Contains(help, want) {
@@ -273,6 +273,27 @@ func TestGenkeyRequiresKeyName(t *testing.T) {
 	err = root.Run(t.Context())
 	if err == nil || !strings.Contains(err.Error(), "--key=client-default") {
 		t.Errorf("genkey --client --key=default: err = %v; want one suggesting --key=client-default", err)
+	}
+}
+
+// TestForwardSubcommand verifies that forward parses its bind flag and
+// positional address blob and mappings without executing the listener.
+func TestForwardSubcommand(t *testing.T) {
+	root, err := parseCLI(t, "forward", "--bind=0.0.0.0", "tcblob", "18080:8080", "9090")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := root.GetSelected()
+	if sel.Name != "forward" {
+		t.Fatalf("selected command = %q; want forward", sel.Name)
+	}
+	got := sel.Flags.(*ff.FlagSet).GetArgs()
+	want := []string{"tcblob", "18080:8080", "9090"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("leftover args = %q; want %q", got, want)
+	}
+	if f, ok := sel.Flags.GetFlag("bind"); !ok || f.GetValue() != "0.0.0.0" {
+		t.Errorf("--bind = %v; want 0.0.0.0", f)
 	}
 }
 
