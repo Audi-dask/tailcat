@@ -15,25 +15,28 @@ func TestParseForwardSpec(t *testing.T) {
 	for _, tt := range []struct {
 		spec, wantAddr string
 		wantPort       uint16
+		wantTarget     string
 		wantErr        bool
 	}{
-		{"8080", "127.0.0.1:8080", 8080, false},
-		{"18080:8080", "127.0.0.1:18080", 8080, false},
-		{"1:65535", "127.0.0.1:1", 65535, false},
-		{"0", "", 0, true},
-		{"8080:0", "", 0, true},
-		{"8080:bad", "", 0, true},
+		{"8080", "127.0.0.1:8080", 8080, "", false},
+		{"18080:8080", "127.0.0.1:18080", 8080, "", false},
+		{"13306:192.168.1.10:3306", "127.0.0.1:13306", 0, "192.168.1.10:3306", false},
+		{"13306:[2001:db8::10]:3306", "127.0.0.1:13306", 0, "[2001:db8::10]:3306", false},
+		{"0", "", 0, "", true},
+		{"8080:0", "", 0, "", true},
+		{"8080:bad", "", 0, "", true},
+		{"8080:192.168.1.10:bad", "", 0, "", true},
 	} {
 		t.Run(tt.spec, func(t *testing.T) {
-			gotAddr, gotPort, err := parseForwardSpec("127.0.0.1", tt.spec)
+			got, err := parseForwardSpec("127.0.0.1", tt.spec)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("parseForwardSpec succeeded; want error")
 				}
 				return
 			}
-			if err != nil || gotAddr != tt.wantAddr || gotPort != tt.wantPort {
-				t.Fatalf("parseForwardSpec(%q) = %q, %d, %v; want %q, %d", tt.spec, gotAddr, gotPort, err, tt.wantAddr, tt.wantPort)
+			if err != nil || got.listenAddr != tt.wantAddr || got.port != tt.wantPort || got.target.String() != tt.wantTarget {
+				t.Fatalf("parseForwardSpec(%q) = %#v, %v; want address %q, port %d, target %q", tt.spec, got, err, tt.wantAddr, tt.wantPort, tt.wantTarget)
 			}
 		})
 	}

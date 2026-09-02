@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"os/signal"
 	"strconv"
@@ -24,20 +25,36 @@ func forwardCommand(parent *ff.FlagSet) *ff.Command {
 	bind := fs.StringLong("bind", "127.0.0.1", "listen address; used as the local address when a mapping only specifies a port")
 	return &ff.Command{
 		Name:      "forward",
-		Usage:     "tailcat forward [flags] <addrblob> <[local:]remote> [<[local:]remote> ...]",
+		Usage:     "tailcat forward [flags] <addrblob> <[local:]remote-port|local-port:remote-host:remote-port> [<...> ...]",
 		ShortHelp: "forward local TCP ports to a tailcat server",
-		LongHelp: `Listen on local TCP ports and forward connections to ports served by a tailcat server.
+		LongHelp: `Listen on local TCP ports and forward connections to a tailcat server.
 
 A mapping with one port uses the same local and remote port. A mapping with
-local:remote uses different local and remote ports. For example:
+local:remote uses different local and remote ports. A mapping with a remote
+host and port requires the server to be running as an exit node. For example:
 
 	tailcat forward <addrblob> 8080
+	tailcat forward <addrblob> 3000:8080
+	tailcat forward <addrblob> 13306:192.168.1.10:3306
 	tailcat forward --bind=0.0.0.0 <addrblob> 18080:8080`,
 		Flags: fs,
 		Exec: func(ctx context.Context, args []string) error {
 			return runForward(ctx, getLogf(), *bind, args)
 		},
 	}
+}
+
+type forwardSpec struct {
+	listenAddr string
+	target     netip.AddrPort
+	port       uint16
+}
+
+func (s forwardSpec) remoteTarget() string {
+	if s.target.IsValid() {
+		return s.target.String()
+	}
+	return net.JoinHostPort("localhost", strconv.Itoa(int(s.port)))
 }
 
 func runForward(ctx context.Context, logf logger.Logf, bind string, args []string) error {
@@ -66,23 +83,23 @@ func runForward(ctx context.Context, logf logger.Logf, bind string, args []strin
 		_ = cl.Close()
 	}()
 	for _, spec := range args[1:] {
-		listenAddr, remotePort, err := parseForwardSpec(bind, spec)
+		mapping, err := parseForwardSpec(bind, spec)
 		if err != nil {
 			for _, ln := range listeners {
 				ln.Close()
 			}
 			return usagef("mapping %q is invalid: %v", spec, err)
 		}
-		ln, err := net.Listen("tcp", listenAddr)
+		ln, err := net.Listen("tcp", mapping.listenAddr)
 		if err != nil {
 			for _, old := range listeners {
 				old.Close()
 			}
-			return fmt.Errorf("listen on %s: %w", listenAddr, err)
+			return fmt.Errorf("listen on %s: %w", mapping.listenAddr, err)
 		}
 		listeners = append(listeners, ln)
 		listenersWG.Add(1)
-		go forwardListener(ctx, logf, cl, ln, remotePort, &listenersWG, &connectionsWG, &active)
+		go forwardListener(ctx, logf, cl, ln, mapping, &listenersWG, &connectionsWG, &active)
 	}
 
 	<-ctx.Done()
@@ -92,9 +109,9 @@ func runForward(ctx context.Context, logf logger.Logf, bind string, args []strin
 	return nil
 }
 
-func forwardListener(ctx context.Context, logf logger.Logf, cl *tailcat.Client, ln net.Listener, remotePort uint16, listenersWG, connectionsWG *sync.WaitGroup, active *sync.Map) {
+func forwardListener(ctx context.Context, logf logger.Logf, cl *tailcat.Client, ln net.Listener, mapping forwardSpec, listenersWG, connectionsWG *sync.WaitGroup, active *sync.Map) {
 	defer listenersWG.Done()
-	logf("forwarding %s -> remote localhost:%d", ln.Addr(), remotePort)
+	logf("forwarding %s -> remote %s", ln.Addr(), mapping.remoteTarget())
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -106,10 +123,16 @@ func forwardListener(ctx context.Context, logf logger.Logf, cl *tailcat.Client, 
 			defer connectionsWG.Done()
 			defer active.Delete(conn)
 			defer conn.Close()
-			remote, err := cl.DialTCPPort(ctx, remotePort)
+			var remote net.Conn
+			var err error
+			if mapping.target.IsValid() {
+				remote, err = cl.DialTCP(ctx, mapping.target)
+			} else {
+				remote, err = cl.DialTCPPort(ctx, mapping.port)
+			}
 			if err != nil {
 				if ctx.Err() == nil {
-					logf("dial remote port %d: %v", remotePort, err)
+					logf("dial remote target %s: %v", mapping.remoteTarget(), err)
 				}
 				return
 			}
@@ -118,20 +141,34 @@ func forwardListener(ctx context.Context, logf logger.Logf, cl *tailcat.Client, 
 	}
 }
 
-func parseForwardSpec(bind, spec string) (string, uint16, error) {
-	local, remote, hasColon := strings.Cut(spec, ":")
+func parseForwardSpec(bind, spec string) (forwardSpec, error) {
+	local, target, hasColon := strings.Cut(spec, ":")
 	if !hasColon {
-		remote = local
-	}
-	remotePort, err := parseForwardPort(remote)
-	if err != nil {
-		return "", 0, fmt.Errorf("remote port: %w", err)
+		target = local
 	}
 	localPort, err := parseForwardPort(local)
 	if err != nil {
-		return "", 0, fmt.Errorf("local port: %w", err)
+		return forwardSpec{}, fmt.Errorf("local port: %w", err)
 	}
-	return net.JoinHostPort(bind, strconv.Itoa(int(localPort))), remotePort, nil
+	mapping := forwardSpec{listenAddr: net.JoinHostPort(bind, strconv.Itoa(int(localPort)))}
+	if !hasColon {
+		mapping.port, err = parseForwardPort(target)
+		if err != nil {
+			return forwardSpec{}, fmt.Errorf("remote port: %w", err)
+		}
+		return mapping, nil
+	}
+	remotePort, err := parseForwardPort(target)
+	if err == nil {
+		mapping.port = remotePort
+		return mapping, nil
+	}
+	remoteAddr, err := netip.ParseAddrPort(target)
+	if err != nil {
+		return forwardSpec{}, fmt.Errorf("remote target %q is not a port or address:port", target)
+	}
+	mapping.target = remoteAddr
+	return mapping, nil
 }
 
 func parseForwardPort(s string) (uint16, error) {
