@@ -41,32 +41,14 @@ archives:
 
 nfpms:
   - package_name: tailcat
-    homepage: https://github.com/tailscale/tailcat
-    maintainer: Tailscale Inc. <info@tailscale.com>
-    description: Netcat-like tool over Tailscale's data plane, without Tailscale's control plane.
+    homepage: https://github.com/Audi-dask/tailcat
+    maintainer: Audi-dask
+    description: Netcat-like tool over Tailscale's data plane, without Tailscale's control plane, with local TCP forwarding support.
     license: BSD-3-Clause
     formats:
       - deb
       - rpm
     bindir: /usr/bin
-
-dockers_v2:
-  - ids: [tailcat]
-    dockerfile: Dockerfile.goreleaser
-    images:
-      - ghcr.io/tailscale/tailcat
-    tags:
-      - v{{ .Version }}
-      - latest
-    platforms:
-      - linux/amd64
-      - linux/arm64
-    labels:
-      org.opencontainers.image.title: tailcat
-      org.opencontainers.image.source: https://github.com/tailscale/tailcat
-      org.opencontainers.image.version: v{{ .Version }}
-      org.opencontainers.image.revision: "{{ .FullCommit }}"
-      org.opencontainers.image.licenses: BSD-3-Clause
 
 checksum:
   name_template: checksums.txt
