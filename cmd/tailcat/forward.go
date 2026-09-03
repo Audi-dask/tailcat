@@ -25,13 +25,14 @@ func forwardCommand(parent *ff.FlagSet) *ff.Command {
 	bind := fs.StringLong("bind", "127.0.0.1", "listen address; used as the local address when a mapping only specifies a port")
 	return &ff.Command{
 		Name:      "forward",
-		Usage:     "tailcat forward [flags] <addrblob> <[local:]remote-port|local-port:remote-host:remote-port> [<...> ...]",
+		Usage:     "tailcat forward [flags] <addrblob> <[local:]remote-port|local-port:remote-ip:remote-port> [<...> ...]",
 		ShortHelp: "forward local TCP ports to a tailcat server",
 		LongHelp: `Listen on local TCP ports and forward connections to a tailcat server.
 
 A mapping with one port uses the same local and remote port. A mapping with
 local:remote uses different local and remote ports. A mapping with a remote
-host and port requires the server to be running as an exit node. For example:
+IP address and port requires the server to be running as an exit node. For
+example:
 
 	tailcat forward <addrblob> 8080
 	tailcat forward <addrblob> 3000:8080
