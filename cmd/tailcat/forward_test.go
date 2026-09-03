@@ -41,7 +41,11 @@ func TestParseForwardSpec(t *testing.T) {
 				}
 				return
 			}
-			if err != nil || got.listenAddr != tt.wantAddr || got.port != tt.wantPort || got.target.String() != tt.wantTarget {
+			wantTarget := ""
+			if got.target.IsValid() {
+				wantTarget = got.target.String()
+			}
+			if err != nil || got.listenAddr != tt.wantAddr || got.port != tt.wantPort || wantTarget != tt.wantTarget {
 				t.Fatalf("parseForwardSpec(%q) = %#v, %v; want address %q, port %d, target %q", tt.spec, got, err, tt.wantAddr, tt.wantPort, tt.wantTarget)
 			}
 		})
