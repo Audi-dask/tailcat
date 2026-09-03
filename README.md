@@ -165,6 +165,19 @@ $ tailcat forward tcXXXXXXXXX 18080:8080 3306
 
 A local port of 0 asks the operating system for a free port; each listener prints its address once it's listening.
 
+To forward local ports to assets on the network reachable by an exit-node server, run the server in exit-node mode and specify each remote IP address and port in the mapping:
+
+```sh
+$ tailcat serve exit-node
+# 🐈 Server listening with new address: tcXXXXXXXXX
+
+$ tailcat forward tcXXXXXXXXX \\
+    3001:172.23.52.30:3001 \\
+    17170:172.23.52.31:17170
+```
+
+This forwards `127.0.0.1:3001` to `172.23.52.30:3001` and `127.0.0.1:17170` to `172.23.52.31:17170` through the exit-node server.
+
 By default, listeners bind to `127.0.0.1` and diagnostic logs are suppressed. Pass `--verbose` before the subcommand to enable verbose networking logs. Use `--bind=0.0.0.0` only when clients on other machines should be able to connect:
 
 ```sh
