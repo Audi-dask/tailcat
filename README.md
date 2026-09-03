@@ -171,8 +171,8 @@ To forward local ports to assets on the network reachable by an exit-node server
 $ tailcat serve exit-node
 # 🐈 Server listening with new address: tcXXXXXXXXX
 
-$ tailcat forward tcXXXXXXXXX \\
-    3001:172.23.52.30:3001 \\
+$ tailcat forward tcXXXXXXXXX \
+    3001:172.23.52.30:3001 \
     17170:172.23.52.31:17170
 ```
 
