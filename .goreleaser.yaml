@@ -18,6 +18,7 @@ builds:
     goos:
       - linux
       - windows
+      - darwin
     goarch:
       - amd64
       - arm64
@@ -54,7 +55,7 @@ dockers_v2:
   - ids: [tailcat]
     dockerfile: Dockerfile.goreleaser
     images:
-      - ghcr.io/tailscale/tailcat
+      - ghcr.io/audi-dask/tailcat
     tags:
       - v{{ .Version }}
       - latest
